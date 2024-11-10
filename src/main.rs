@@ -4,9 +4,11 @@ use axum::{
     routing::post,
     Router,
 };
+use axum_server::tls_rustls::RustlsConfig;
 use hmac::{Hmac, Mac};
 use secrecy::{ExposeSecret, SecretString};
 use sha2::Sha256;
+use std::error::Error;
 
 #[derive(Clone)]
 struct GithubSecret {
@@ -14,7 +16,16 @@ struct GithubSecret {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn Error>> {
+    let config = RustlsConfig::from_pem_file("certs/cert.pem", "certs/key.pem")
+        .await
+        .map_err(|original| {
+            eprintln!(
+                r#"[github-watch]: Please put valid certs at "certs/cert.pem" and "certs/key.pem""#
+            );
+            original
+        })?;
+
     let secret = GithubSecret::get_or_generate();
 
     let router = Router::new()
@@ -22,9 +33,13 @@ async fn main() {
         .with_state(secret);
 
     let address = "[::]:8081";
-    let listner = tokio::net::TcpListener::bind(address).await.unwrap();
+    let listner = std::net::TcpListener::bind(address)?;
     println!("[github-watch]: Info: Listening on: http://{}\n", address);
-    axum::serve(listner, router).await.unwrap();
+    axum_server::from_tcp_rustls(listner, config)
+        .serve(router.into_make_service())
+        .await?;
+
+    Ok(())
 }
 
 pub type HmacSha256 = Hmac<Sha256>;
